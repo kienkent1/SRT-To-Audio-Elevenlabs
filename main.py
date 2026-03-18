@@ -87,6 +87,10 @@ async def convert(
     file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
     file: Optional[UploadFile] = File(None, description="File SRT hoặc TXT tải trực tiếp")
 ):
+    # Strip whitespace to prevent invalid_uid errors from hidden newlines
+    api_key = api_key.strip()
+    voice_id = voice_id.strip()
+
     srt_content = ""
     original_filename = "output.mp3"
 

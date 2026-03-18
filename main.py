@@ -8,6 +8,7 @@ import uuid
 import base64
 import requests
 from services.srt_to_audio import srt_to_audio
+from services.txt_to_srt import txt_to_srt
 from scalar_fastapi import get_scalar_api_reference
 
 app = FastAPI(
@@ -83,6 +84,97 @@ def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: st
         import traceback
         traceback.print_exc()
         update_status(uid, "fail", error=str(e))
+
+@app.post(
+    "/txt-to-srt",
+    summary="Convert Plain Text to SRT File",
+    description="Nhận file TXT, URL hoặc base64, chuyển đổi sang định dạng SRT và lưu thành file để tải về.",
+    tags=["Text Tools"]
+)
+async def convert_txt_to_srt(
+    url: Optional[str] = Form(None, description="URL trỏ tới file TXT"),
+    file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
+    file: Optional[UploadFile] = File(None, description="File TXT tải trực tiếp")
+):
+    text_content = ""
+    original_filename = "output.txt"
+    if file:
+        content = await file.read()
+        text_content = content.decode("utf-8")
+        original_filename = file.filename
+    elif file_base64:
+        try:
+            content = base64.b64decode(file_base64)
+            text_content = content.decode("utf-8")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 content")
+    elif url:
+        try:
+            resp = requests.get(url)
+            if resp.status_code == 200:
+                text_content = resp.text
+            else:
+                raise HTTPException(status_code=400, detail=f"Could not fetch URL: {resp.status_code}")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error fetching URL: {str(e)}")
+    else:
+        raise HTTPException(status_code=400, detail="No file, URL, or base64 content provided")
+
+    if not text_content:
+        raise HTTPException(status_code=400, detail="Content is empty")
+
+    srt_content = txt_to_srt(text_content)
+    
+    request_id = str(uuid.uuid4())
+    relative_request_dir = os.path.join("results", request_id)
+    request_dir = os.path.join(PROJECT_ROOT, relative_request_dir)
+    os.makedirs(request_dir, exist_ok=True)
+    
+    output_filename = f"output_{request_id}.srt"
+    relative_output_path = os.path.join(relative_request_dir, output_filename)
+    absolute_output_path = os.path.join(PROJECT_ROOT, relative_output_path)
+    
+    with open(absolute_output_path, "w", encoding="utf-8") as f:
+        f.write(srt_content)
+        
+    # Initialize in DB as success (since it's synchronous and fast)
+    base_name = os.path.splitext(original_filename)[0]
+    final_download_name = f"{base_name}.srt"
+    
+    db = load_db()
+    db[request_id] = {
+        "status": "success",
+        "path": relative_output_path,
+        "filename": final_download_name,
+        "type": "srt",
+        "error": None
+    }
+    save_db(db)
+
+    return {"request_id": request_id, "status": "success", "message": "Chuyển đổi thành công", "srt_preview": srt_content[:200] + "..."}
+
+@app.get(
+    "/srt/{uid}", 
+    summary="Get SRT File",
+    description="Tải về file SRT dựa trên request_id.",
+    tags=["Text Tools"]
+)
+async def get_srt(uid: str = Path(..., description="ID nhận được từ txt-to-srt")):
+    db = load_db()
+    if uid not in db:
+        raise HTTPException(status_code=404, detail="Request ID not found")
+        
+    item = db[uid]
+    if item.get("type") != "srt":
+        raise HTTPException(status_code=400, detail="This ID is not an SRT conversion")
+        
+    relative_path = item["path"]
+    absolute_path = os.path.join(PROJECT_ROOT, relative_path)
+    
+    if not os.path.exists(absolute_path):
+        raise HTTPException(status_code=404, detail="SRT file missing on disk")
+        
+    return FileResponse(absolute_path, media_type="text/plain", filename=item["filename"])
 
 @app.post(
     "/convert", 

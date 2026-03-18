@@ -21,6 +21,14 @@ app = FastAPI(
 DB_FILE = "db.json"
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+@app.get("/", include_in_schema=False)
+async def root():
+    return {"message": "Welcome to SRT To Audio ElevenLabs API"}
+
+@app.get("/health", include_in_schema=False)
+async def health():
+    return {"message": "Good"}
+
 @app.get("/docs", include_in_schema=False)
 async def scalar_html():
     return get_scalar_api_reference(

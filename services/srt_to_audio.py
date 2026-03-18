@@ -56,7 +56,7 @@ def create_voice_from_sample(api_key, sample_path, voice_name="ClonedVoice"):
         print(f"Error cloning voice: {e}")
         raise
 
-def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None):
+def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None, output_type="mp3", model_id="eleven_v3"):
     if srt_content:
         subs = pysrt.from_string(srt_content)
     elif srt_path:
@@ -96,8 +96,7 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None)
         print(f"Creating a silent background track of {total_duration_ms / 1000} seconds...")
         combined_audio = AudioSegment.silent(duration=total_duration_ms + 10000) 
         
-        model_id = "eleven_v3" 
-        print(f"Processing {len(subs)} subtitle entries...")
+        print(f"Processing {len(subs)} subtitle entries using model: {model_id}...")
         
         for i, sub in enumerate(subs):
             start_ms = (sub.start.hours * 3600 + sub.start.minutes * 60 + sub.start.seconds) * 1000 + sub.start.milliseconds
@@ -132,12 +131,17 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None)
             else:
                 raise Exception(f"API Error at segment {i+1}: {response.status_code} - {response.text}")
 
-        output_filename = f"output_{request_id}.mp3"
+        # Map client format to pydub export format
+        export_format = output_type.lower()
+        if export_format == "aac":
+            export_format = "adts" # pydub uses adts for aac encoding usually via ffmpeg
+            
+        output_filename = f"output_{request_id}.{output_type.lower()}"
         relative_output_path = os.path.join(relative_request_dir, output_filename)
         absolute_output_path = os.path.join(project_root, relative_output_path)
         
-        print(f"Saving final audio to {absolute_output_path}...")
-        combined_audio.export(absolute_output_path, format="mp3", bitrate="192k")
+        print(f"Saving final audio to {absolute_output_path} (format: {export_format})...")
+        combined_audio.export(absolute_output_path, format=export_format)
         success = True
         return relative_output_path
 

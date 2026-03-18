@@ -59,13 +59,15 @@ def update_status(uid: str, status: str, path: str = None, error: str = None):
             db[uid]["error"] = error
         save_db(db)
 
-def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: str):
+def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: str, output_type: str, model_id: str):
     try:
         final_relative_path = srt_to_audio(
             api_key=api_key,
             voice_id=voice_id,
             request_id=uid,
-            srt_content=srt_content
+            srt_content=srt_content,
+            output_type=output_type,
+            model_id=model_id
         )
         update_status(uid, "success", path=final_relative_path)
     except Exception as e:
@@ -83,6 +85,8 @@ async def convert(
     background_tasks: BackgroundTasks,
     api_key: str = Form(..., description="API Key của ElevenLabs"),
     voice_id: str = Form(..., description="ID của voice cần dùng"),
+    model_id: str = Form("eleven_v3", description="ID của model ElevenLabs (mặc định: eleven_v3)"),
+    output_type: str = Form("mp3", description="Loại file đầu ra: mp3, aac, wav"),
     url: Optional[str] = Form(None, description="URL trỏ tới file SRT hoặc TXT"),
     file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
     file: Optional[UploadFile] = File(None, description="File SRT hoặc TXT tải trực tiếp")
@@ -90,6 +94,11 @@ async def convert(
     # Strip whitespace to prevent invalid_uid errors from hidden newlines
     api_key = api_key.strip()
     voice_id = voice_id.strip()
+    model_id = model_id.strip()
+    output_type = output_type.strip().lower()
+    
+    if output_type not in ["mp3", "aac", "wav"]:
+         raise HTTPException(status_code=400, detail="output_type must be mp3, aac, or wav")
 
     srt_content = ""
     original_filename = "output.mp3"
@@ -119,6 +128,10 @@ async def convert(
     if not srt_content:
         raise HTTPException(status_code=400, detail="Content is empty")
 
+    # Generate output filename with correct extension
+    base_name = os.path.splitext(original_filename)[0]
+    final_download_name = f"{base_name}.{output_type}"
+
     request_id = str(uuid.uuid4())
     
     # Initialize in DB as pending
@@ -126,13 +139,15 @@ async def convert(
     db[request_id] = {
         "status": "pending",
         "path": None,
-        "filename": original_filename,
+        "filename": final_download_name,
+        "output_type": output_type,
+        "model_id": model_id,
         "error": None
     }
     save_db(db)
 
     # Add to background tasks
-    background_tasks.add_task(background_conversion, request_id, api_key, voice_id, srt_content)
+    background_tasks.add_task(background_conversion, request_id, api_key, voice_id, srt_content, output_type, model_id)
     
     return {"request_id": request_id, "status": "pending", "message": "Xử lý đã bắt đầu trong background"}
 

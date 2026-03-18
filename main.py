@@ -12,7 +12,16 @@ from scalar_fastapi import get_scalar_api_reference
 
 app = FastAPI(
     title="SRT To Audio ElevenLabs API",
-    description="API để chuyển đổi file SRT hoặc text sang audio sử dụng ElevenLabs AI.",
+    description="""
+    # 🎧 SRT To Audio API
+
+    Convert subtitle (.srt) to audio using ElevenLabs.
+
+    ---
+
+    ### 🔗 Source Code
+👉 [GitHub Repository](https://github.com/kienkent1/SRT-To-Audio-Elevenlabs)
+    """,
     version="1.1.0",
     docs_url=None, 
     redoc_url=None

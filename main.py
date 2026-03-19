@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Path, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Path, Query, BackgroundTasks, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -30,6 +30,46 @@ app = FastAPI(
 
 DB_FILE = "db.json"
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+class ConvertDTO(BaseModel):
+    api_key: str = Field(..., description="API Key của ElevenLabs")
+    voice_id: str = Field(..., description="ID của voice cần dùng")
+    model_id: str = Field("eleven_v3", description="ID của model ElevenLabs")
+    output_type: str = Field("mp3", description="Loại file đầu ra: mp3, aac, wav")
+    url: Optional[str] = Field(None, description="URL trỏ tới file SRT hoặc TXT")
+    file_base64: Optional[str] = Field(None, description="Chuỗi base64 của nội dung file")
+
+    @classmethod
+    def as_form(
+        cls,
+        api_key: str = Form(..., description="API Key của ElevenLabs"),
+        voice_id: str = Form(..., description="ID của voice cần dùng"),
+        model_id: str = Form("eleven_v3", description="ID của model ElevenLabs"),
+        output_type: str = Form("mp3", description="Loại file đầu ra: mp3, aac, wav"),
+        url: Optional[str] = Form(None, description="URL trỏ tới file SRT hoặc TXT"),
+        file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
+    ):
+        # Strip strings manually or via pydub logic
+        return cls(
+            api_key=api_key.strip(),
+            voice_id=voice_id.strip(),
+            model_id=model_id.strip(),
+            output_type=output_type.strip().lower(),
+            url=url,
+            file_base64=file_base64
+        )
+
+class TxtToSrtDTO(BaseModel):
+    url: Optional[str] = Field(None, description="URL trỏ tới file TXT")
+    file_base64: Optional[str] = Field(None, description="Chuỗi base64 của nội dung file")
+
+    @classmethod
+    def as_form(
+        cls,
+        url: Optional[str] = Form(None, description="URL trỏ tới file TXT"),
+        file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
+    ):
+        return cls(url=url, file_base64=file_base64)
 
 @app.get("/", include_in_schema=False)
 async def root():
@@ -71,7 +111,7 @@ def update_status(uid: str, status: str, path: str = None, error: str = None):
 
 def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: str, output_type: str, model_id: str):
     try:
-        final_relative_path = srt_to_audio(
+        final_relative_path, api_error = srt_to_audio(
             api_key=api_key,
             voice_id=voice_id,
             request_id=uid,
@@ -79,7 +119,11 @@ def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: st
             output_type=output_type,
             model_id=model_id
         )
-        update_status(uid, "success", path=final_relative_path)
+        if api_error:
+            # Nếu có lỗi API xảy ra giữa chừng nhưng vẫn có file (partial)
+            update_status(uid, "fail", path=final_relative_path, error=api_error)
+        else:
+            update_status(uid, "success", path=final_relative_path)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -92,8 +136,7 @@ def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: st
     tags=["Text Tools"]
 )
 async def convert_txt_to_srt(
-    url: Optional[str] = Form(None, description="URL trỏ tới file TXT"),
-    file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
+    dto: TxtToSrtDTO = Depends(TxtToSrtDTO.as_form),
     file: Optional[UploadFile] = File(None, description="File TXT tải trực tiếp")
 ):
     text_content = ""
@@ -102,15 +145,15 @@ async def convert_txt_to_srt(
         content = await file.read()
         text_content = content.decode("utf-8")
         original_filename = file.filename
-    elif file_base64:
+    elif dto.file_base64:
         try:
-            content = base64.b64decode(file_base64)
+            content = base64.b64decode(dto.file_base64)
             text_content = content.decode("utf-8")
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid base64 content")
-    elif url:
+    elif dto.url:
         try:
-            resp = requests.get(url)
+            resp = requests.get(dto.url)
             if resp.status_code == 200:
                 text_content = resp.text
             else:
@@ -137,7 +180,6 @@ async def convert_txt_to_srt(
     with open(absolute_output_path, "w", encoding="utf-8") as f:
         f.write(srt_content)
         
-    # Initialize in DB as success (since it's synchronous and fast)
     base_name = os.path.splitext(original_filename)[0]
     final_download_name = f"{base_name}.srt"
     
@@ -184,21 +226,10 @@ async def get_srt(uid: str = Path(..., description="ID nhận được từ txt-
 )
 async def convert(
     background_tasks: BackgroundTasks,
-    api_key: str = Form(..., description="API Key của ElevenLabs"),
-    voice_id: str = Form(..., description="ID của voice cần dùng"),
-    model_id: str = Form("eleven_v3", description="ID của model ElevenLabs (mặc định: eleven_v3)"),
-    output_type: str = Form("mp3", description="Loại file đầu ra: mp3, aac, wav"),
-    url: Optional[str] = Form(None, description="URL trỏ tới file SRT hoặc TXT"),
-    file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
+    dto: ConvertDTO = Depends(ConvertDTO.as_form),
     file: Optional[UploadFile] = File(None, description="File SRT hoặc TXT tải trực tiếp")
 ):
-    # Strip whitespace to prevent invalid_uid errors from hidden newlines
-    api_key = api_key.strip()
-    voice_id = voice_id.strip()
-    model_id = model_id.strip()
-    output_type = output_type.strip().lower()
-    
-    if output_type not in ["mp3", "aac", "wav"]:
+    if dto.output_type not in ["mp3", "aac", "wav"]:
          raise HTTPException(status_code=400, detail="output_type must be mp3, aac, or wav")
 
     srt_content = ""
@@ -208,15 +239,15 @@ async def convert(
         content = await file.read()
         srt_content = content.decode("utf-8")
         original_filename = file.filename
-    elif file_base64:
+    elif dto.file_base64:
         try:
-            content = base64.b64decode(file_base64)
+            content = base64.b64decode(dto.file_base64)
             srt_content = content.decode("utf-8")
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid base64 content")
-    elif url:
+    elif dto.url:
         try:
-            resp = requests.get(url)
+            resp = requests.get(dto.url)
             if resp.status_code == 200:
                 srt_content = resp.text
             else:
@@ -229,26 +260,23 @@ async def convert(
     if not srt_content:
         raise HTTPException(status_code=400, detail="Content is empty")
 
-    # Generate output filename with correct extension
     base_name = os.path.splitext(original_filename)[0]
-    final_download_name = f"{base_name}.{output_type}"
+    final_download_name = f"{base_name}.{dto.output_type}"
 
     request_id = str(uuid.uuid4())
     
-    # Initialize in DB as pending
     db = load_db()
     db[request_id] = {
         "status": "pending",
         "path": None,
         "filename": final_download_name,
-        "output_type": output_type,
-        "model_id": model_id,
+        "output_type": dto.output_type,
+        "model_id": dto.model_id,
         "error": None
     }
     save_db(db)
 
-    # Add to background tasks
-    background_tasks.add_task(background_conversion, request_id, api_key, voice_id, srt_content, output_type, model_id)
+    background_tasks.add_task(background_conversion, request_id, dto.api_key, dto.voice_id, srt_content, dto.output_type, dto.model_id)
     
     return {"request_id": request_id, "status": "pending", "message": "Xử lý đã bắt đầu trong background"}
 

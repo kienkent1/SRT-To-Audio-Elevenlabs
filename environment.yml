@@ -16,3 +16,4 @@ dependencies:
       - scalar-fastapi
       - python-multipart
       - uvicorn
+      - urllib3

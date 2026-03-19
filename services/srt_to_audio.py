@@ -5,6 +5,7 @@ import requests
 import shutil
 import uuid
 import io
+import subprocess
 
 # =====================================================================
 # ÉP PYDUB DÙNG BẢN FFMPEG ĐỘC LẬP TẠI THƯ MỤC DỰ ÁN
@@ -86,15 +87,21 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None,
     print(f"Đã tạo thư mục lưu file tạm: {temp_dir}")
 
     success = False
+    error_occurred = None
+    chunks_generated = 0
     try:
         if subs:
-            last_sub = subs[-1]
-            total_duration_ms = (last_sub.end.hours * 3600 + last_sub.end.minutes * 60 + last_sub.end.seconds) * 1000 + last_sub.end.milliseconds
+            total_duration_ms = 0
+            for sub in subs:
+                end_ms = (sub.end.hours * 3600 + sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.end.milliseconds
+                if end_ms > total_duration_ms:
+                    total_duration_ms = end_ms
         else:
             total_duration_ms = 10000
 
-        print(f"Creating a silent background track of {total_duration_ms / 1000} seconds...")
-        combined_audio = AudioSegment.silent(duration=total_duration_ms + 10000) 
+        print(f"Total duration: {total_duration_ms / 1000}s. Creating silent background track...")
+        # Add a small 1s padding instead of 10s
+        combined_audio = AudioSegment.silent(duration=total_duration_ms + 1000) 
         
         print(f"Processing {len(subs)} subtitle entries using model: {model_id}...")
         
@@ -128,22 +135,60 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None,
                     f.write(audio_bytes)
                 segment = AudioSegment.from_file(temp_chunk_path, format="mp3")
                 combined_audio = combined_audio.overlay(segment, position=start_ms)
+                chunks_generated += 1
             else:
-                raise Exception(f"API Error at segment {i+1}: {response.status_code} - {response.text}")
+                error_occurred = f"API Error at segment {i+1}: {response.status_code} - {response.text}"
+                print(error_occurred)
+                # Nếu đã có ít nhất 1 chunk thành công, hãy break để lưu phần đã có
+                if chunks_generated > 0:
+                    break
+                else:
+                    raise Exception(error_occurred)
 
-        # Map client format to pydub export format
-        export_format = output_type.lower()
-        if export_format == "aac":
-            export_format = "adts" # pydub uses adts for aac encoding usually via ffmpeg
-            
+        if chunks_generated == 0:
+            if error_occurred:
+                raise Exception(error_occurred)
+            else:
+                return None, "No audio chunks were generated."
+
+        # --- BẢO VỆ 2 LỚP: MERGE RA MP3 TRƯỚC RỒI MỚI CONVERT SANG AAC ---
+        # Điều này giúp làm phẳng (flatten) các segment và đảm bảo timing chuẩn xác.
+        temp_final_mp3 = os.path.join(temp_dir, f"temp_final_{request_id}.mp3")
+        print(f"Baking audio to intermediate MP3: {temp_final_mp3}")
+        
+        # Clip audio to actual duration to be absolutely sure
+        final_mix = combined_audio[:total_duration_ms + 1000]
+        final_mix.export(temp_final_mp3, format="mp3")
+        
         output_filename = f"output_{request_id}.{output_type.lower()}"
         relative_output_path = os.path.join(relative_request_dir, output_filename)
         absolute_output_path = os.path.join(project_root, relative_output_path)
-        
-        print(f"Saving final audio to {absolute_output_path} (format: {export_format})...")
-        combined_audio.export(absolute_output_path, format=export_format)
+
+        if output_type.lower() == "aac":
+            print(f"Converting MP3 to AAC using web-standard M4A-wrapper command...")
+            cmd = [
+                AudioSegment.converter,
+                "-y",
+                "-i", temp_final_mp3,
+                "-c:a", "aac",          # Codec AAC
+                "-b:a", "192k",         # Bitrate chất lượng cao
+                "-ar", "44100",         # Ép chuẩn Sample Rate
+                "-ac", "2",             # Ép chuẩn số kênh
+                "-f", "ipod",           # M4A wrapper (quan trọng để định danh thời gian chuẩn)
+                absolute_output_path
+            ]
+            print(f"Running command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"FFmpeg Error: {result.stderr}")
+                raise Exception(f"FFmpeg conversion failed: {result.stderr}")
+        else:
+            export_format = output_type.lower()
+            print(f"Saving final audio to {absolute_output_path} (format: {export_format})...")
+            final_mix.export(absolute_output_path, format=export_format)
+
         success = True
-        return relative_output_path
+        return relative_output_path, error_occurred
 
     finally:
         # Cleanup chunks

@@ -1,1 +1,10 @@
-{}
+{
+  "71faa03f-3354-4054-a65b-d50a5d21ff27": {
+    "status": "success",
+    "path": "results\\71faa03f-3354-4054-a65b-d50a5d21ff27\\output_71faa03f-3354-4054-a65b-d50a5d21ff27.mp3",
+    "filename": "input.mp3",
+    "output_type": "mp3",
+    "model_id": "eleven_v3",
+    "error": null
+  }
+}

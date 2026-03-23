@@ -61,7 +61,7 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None,
     if srt_content:
         subs = pysrt.from_string(srt_content)
     elif srt_path:
-        subs = pysrt.open(srt_path)
+        subs = pysrt.open(srt_path, encoding='utf-8')
     else:
         raise ValueError("Either srt_path or srt_content must be provided")
 
@@ -89,20 +89,9 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None,
     success = False
     error_occurred = None
     chunks_generated = 0
+    segments_to_overlay = [] # List of (AudioSegment, start_ms)
+    
     try:
-        if subs:
-            total_duration_ms = 0
-            for sub in subs:
-                end_ms = (sub.end.hours * 3600 + sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.end.milliseconds
-                if end_ms > total_duration_ms:
-                    total_duration_ms = end_ms
-        else:
-            total_duration_ms = 10000
-
-        print(f"Total duration: {total_duration_ms / 1000}s. Creating silent background track...")
-        # Add a small 1s padding instead of 10s
-        combined_audio = AudioSegment.silent(duration=total_duration_ms + 1000) 
-        
         print(f"Processing {len(subs)} subtitle entries using model: {model_id}...")
         
         for i, sub in enumerate(subs):
@@ -134,12 +123,11 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None,
                 with open(temp_chunk_path, "wb") as f:
                     f.write(audio_bytes)
                 segment = AudioSegment.from_file(temp_chunk_path, format="mp3")
-                combined_audio = combined_audio.overlay(segment, position=start_ms)
+                segments_to_overlay.append((segment, start_ms))
                 chunks_generated += 1
             else:
                 error_occurred = f"API Error at segment {i+1}: {response.status_code} - {response.text}"
                 print(error_occurred)
-                # Nếu đã có ít nhất 1 chunk thành công, hãy break để lưu phần đã có
                 if chunks_generated > 0:
                     break
                 else:
@@ -150,6 +138,21 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None,
                 raise Exception(error_occurred)
             else:
                 return None, "No audio chunks were generated."
+
+        # Calculate total duration based on actual segment lengths
+        max_end_ms = 0
+        for segment, start_ms in segments_to_overlay:
+            end_ms = start_ms + len(segment)
+            if end_ms > max_end_ms:
+                max_end_ms = end_ms
+        
+        total_duration_ms = max_end_ms + 1000 # Add 1s padding
+        print(f"Total calculated duration: {total_duration_ms / 1000}s. Creating silent background track...")
+        combined_audio = AudioSegment.silent(duration=total_duration_ms, frame_rate=44100)
+        combined_audio = combined_audio.set_channels(2)
+
+        for segment, start_ms in segments_to_overlay:
+            combined_audio = combined_audio.overlay(segment, position=start_ms)
 
         # --- BẢO VỆ 2 LỚP: MERGE RA MP3 TRƯỚC RỒI MỚI CONVERT SANG AAC ---
         # Điều này giúp làm phẳng (flatten) các segment và đảm bảo timing chuẩn xác.

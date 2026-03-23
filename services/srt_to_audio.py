@@ -57,7 +57,7 @@ def create_voice_from_sample(api_key, sample_path, voice_name="ClonedVoice"):
         print(f"Error cloning voice: {e}")
         raise
 
-def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None, output_type="mp3", model_id="eleven_v3"):
+def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None, output_type="mp3", model_id="eleven_v3", fix_duration=True):
     if srt_content:
         subs = pysrt.from_string(srt_content)
     elif srt_path:
@@ -123,6 +123,19 @@ def srt_to_audio(api_key, voice_id, request_id, srt_content=None, srt_path=None,
                 with open(temp_chunk_path, "wb") as f:
                     f.write(audio_bytes)
                 segment = AudioSegment.from_file(temp_chunk_path, format="mp3")
+                
+                # --- XỬ LÝ CO/GIÃN THEO TIMETAMPS NẾU ĐƯỢC YÊU CẦU ---
+                if fix_duration:
+                    end_ms = (sub.end.hours * 3600 + sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.end.milliseconds
+                    target_duration_ms = end_ms - start_ms
+                    if target_duration_ms > 0:
+                        current_duration_ms = len(segment)
+                        speed_factor = current_duration_ms / target_duration_ms
+                        # Ép speed thay đổi bằng cách thay đổi frame_rate (cách nhanh nhất trong pydub)
+                        segment = segment._spawn(segment.raw_data, overrides={
+                            "frame_rate": int(segment.frame_rate * speed_factor)
+                        }).set_frame_rate(segment.frame_rate)
+                
                 segments_to_overlay.append((segment, start_ms))
                 chunks_generated += 1
             else:

@@ -36,6 +36,7 @@ class ConvertDTO(BaseModel):
     voice_id: str = Field(..., description="ID của voice cần dùng")
     model_id: str = Field("eleven_v3", description="ID của model ElevenLabs")
     output_type: str = Field("mp3", description="Loại file đầu ra: mp3, aac, wav")
+    fix_duration: bool = Field(True, description="Nếu true, audio sẽ được co/giãn để khớp với timetamps của SRT")
     url: Optional[str] = Field(None, description="URL trỏ tới file SRT hoặc TXT")
     file_base64: Optional[str] = Field(None, description="Chuỗi base64 của nội dung file")
 
@@ -46,6 +47,7 @@ class ConvertDTO(BaseModel):
         voice_id: str = Form(..., description="ID của voice cần dùng"),
         model_id: str = Form("eleven_v3", description="ID của model ElevenLabs"),
         output_type: str = Form("mp3", description="Loại file đầu ra: mp3, aac, wav"),
+        fix_duration: bool = Form(True, description="Nếu true, audio sẽ được co/giãn để khớp với timetamps của SRT"),
         url: Optional[str] = Form(None, description="URL trỏ tới file SRT hoặc TXT"),
         file_base64: Optional[str] = Form(None, description="Chuỗi base64 của nội dung file"),
     ):
@@ -55,6 +57,7 @@ class ConvertDTO(BaseModel):
             voice_id=voice_id.strip(),
             model_id=model_id.strip(),
             output_type=output_type.strip().lower(),
+            fix_duration=fix_duration,
             url=url,
             file_base64=file_base64
         )
@@ -109,7 +112,7 @@ def update_status(uid: str, status: str, path: str = None, error: str = None):
             db[uid]["error"] = error
         save_db(db)
 
-def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: str, output_type: str, model_id: str):
+def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: str, output_type: str, model_id: str, fix_duration: bool):
     try:
         final_relative_path, api_error = srt_to_audio(
             api_key=api_key,
@@ -117,7 +120,8 @@ def background_conversion(uid: str, api_key: str, voice_id: str, srt_content: st
             request_id=uid,
             srt_content=srt_content,
             output_type=output_type,
-            model_id=model_id
+            model_id=model_id,
+            fix_duration=fix_duration
         )
         if api_error:
             # Nếu có lỗi API xảy ra giữa chừng nhưng vẫn có file (partial)
@@ -272,11 +276,12 @@ async def convert(
         "filename": final_download_name,
         "output_type": dto.output_type,
         "model_id": dto.model_id,
+        "fix_duration": dto.fix_duration,
         "error": None
     }
     save_db(db)
 
-    background_tasks.add_task(background_conversion, request_id, dto.api_key, dto.voice_id, srt_content, dto.output_type, dto.model_id)
+    background_tasks.add_task(background_conversion, request_id, dto.api_key, dto.voice_id, srt_content, dto.output_type, dto.model_id, dto.fix_duration)
     
     return {"request_id": request_id, "status": "pending", "message": "Xử lý đã bắt đầu trong background"}
 

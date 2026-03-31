@@ -43,6 +43,3 @@ Yêu cầu: Đã cài đặt Conda.
 
 ## Tài liệu chi tiết
 Sau khi khởi chạy ứng dụng, truy cập vào `http://localhost:8000/docs` để xem tài liệu API chi tiết và thử nghiệm trực tiếp.
-
----
-Phát triển bởi Antigravity AI.

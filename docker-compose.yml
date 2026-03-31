@@ -1,6 +1,6 @@
 services:
   srt-to-audio-elevenlabs-api:
-    image: kiendevtify2007/srt-to-audio-elevenlabs-api:latest
+    image: xuongkienphung/srt-to-audio-elevenlabs-api:latest
     build: .
     ports:
       - "8000:8000"
